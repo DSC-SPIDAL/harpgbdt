@@ -27,7 +27,8 @@
 #include "../common/io.h"
 #include "../common/random.h"
 #include "../common/quantile.h"
-#include "../common/pos_set_lossguide.h"
+//#include "../common/pos_set_lossguide.h"
+#include "../common/pos_set_lossguide_gpair.h"
 
 namespace xgboost {
 namespace tree {
@@ -234,7 +235,8 @@ class BlockBaseMakerLossguide: public TreeUpdater {
     {
       // setup position
       // todo: or max_leaves
-      posset_.Init(gpair.size(), max_leaves * 2, rowblksize);
+      //posset_.Init(gpair.size(), max_leaves * 2, rowblksize);
+      posset_.Init(gpair, max_leaves * 2, rowblksize);
 
       //
       // todo: parallelism on all entry
@@ -357,7 +359,8 @@ class BlockBaseMakerLossguide: public TreeUpdater {
   /*!
    * \brief position of each instance in the tree
    */
-  POSSetSingle posset_;
+  //POSSetSingle posset_;
+  POSSetSingleGPair posset_;
 
   TimeInfo tminfo;
 

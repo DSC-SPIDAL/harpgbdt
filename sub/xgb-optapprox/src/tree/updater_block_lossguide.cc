@@ -947,7 +947,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         ApplySplitOnTree(split_nodeset, splitOutput, p_tree);
         ApplySplitOnPos(split_nodeset, split_depth, splitResult, *p_tree);
 
-        printPOSSetSingle(posset_);
+        //printPOSSetSingle(posset_);
 
         splitResult.getResultNodeSet(build_nodeset, build_depth,
                 large_nodeset, large_depth);
@@ -2153,12 +2153,14 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         for (int j = 0; j < grp.size(); ++j) {
             const int ridx = grp.getRowId(j);
+            const GradientPair gp = grp.getGHPair(j);
 
             for (int k = 0; k < block.rowsizeByRowId(ridx); k++){
 
                 if (block._binidByRowId(ridx,k) == EMPTYBINID) continue;
 
-                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                //hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gp);
 
                 /*
                  * not much benefits from short->byte
@@ -2256,12 +2258,14 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         for (int j = 0; j < grp.size(); ++j) {
             const int ridx = grp.getRowId(j);
+            const GradientPair gp = grp.getGHPair(j);
 
             for (int k = 0; k < block.rowsizeByRowId(ridx); k++){
 
                 if (block._binidByRowId(ridx,k) == EMPTYBINID) continue;
 
-                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                //hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gp);
 
                 /*
                  * not much benefits from short->byte
