@@ -864,7 +864,10 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
       SplitInfo splitOutput;
       SplitResult splitResult;
 
-      while (!qexpand_->empty()) {
+      bool quit = false;
+
+      //while (!qexpand_->empty()) {
+      while (!quit) {
 
         // 1. pop top K candidates
         build_nodeset.clear();
@@ -876,10 +879,14 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         split_depth.clear();
 
         int popCnt = 0;
-        while (!qexpand_->empty() && popCnt < topK){
+        //while (!qexpand_->empty() && popCnt < topK){
+        while (popCnt < topK){
 
           mutex_qexpand_.lock();
-          if (qexpand_->empty()) break;
+          if (qexpand_->empty()){
+              mutex_qexpand_.unlock();
+              break;
+          }
           const auto candidate = qexpand_->top();
           const int nid = candidate.nid;
           qexpand_->pop();
@@ -933,7 +940,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         } /* end of while pop out nodes */
 
         //quit if no need to split
-        if (split_nodeset.size() == 0) continue;
+        //if (split_nodeset.size() == 0) continue;
+        if (split_nodeset.size() == 0) break;
 
         #ifdef USE_DEBUG
         std::ostringstream stringStream;
@@ -990,20 +998,25 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                     large_depth.end());
         }
         FindSplit(gpair, work_set_, build_nodeset, splitOutput, threadid);
+
+
+        mutex_qexpand_.lock();
         for (int i = 0; i < build_nodeset.size(); i++){
 
-          mutex_qexpand_.lock();
+          //mutex_qexpand_.lock();
           qexpand_->push(this->newEntry(build_nodeset[i],
                       build_depth[i],
                       //p_tree->GetDepth(build_nodeset[i]),
                       splitOutput.sol[i],
                       splitOutput.left_sum[i], timestamp++));
-          mutex_qexpand_.unlock();
+          //mutex_qexpand_.unlock();
 
           num_leaves++;
         }
         //remove those parents node splitted
         num_leaves -= large_nodeset.size();
+
+        mutex_qexpand_.unlock();
 
         //check finish
         if (max_leaves != max_leaves_ && num_leaves >= max_leaves) {
@@ -1222,7 +1235,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
             int fidoffset = this->feat2workindex_[fid];
 
-            CHECK_GE(fidoffset, 0);
+            //CHECK_GE(fidoffset, 0);
+            if (fidoffset < 0) continue;
+
             EnumerateSplit(this->wspace_.hset.GetHistUnitByFid(fidoffset, mid),
                        node_sum, fid, &best, &left_sum[wid]);
 
@@ -1277,6 +1292,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         int fidoffset = this->feat2workindex_[fid];
 
         CHECK_GE(fidoffset, 0);
+        if (fidoffset < 0) continue;
+
         EnumerateSplit(this->wspace_.hset.GetHistUnitByFid(fidoffset, mid),
                        node_sum, fid, &best, &left_sum[wid]);
 
@@ -1938,11 +1955,17 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // only for initialization
     // nid should be 0
     const unsigned nid = 0;
-    hbuilder[nid].hist = this->wspace_.hset.InitGetHistUnitByFid(fid_offset,nid);
+    if (fid_offset >= 0){
+        hbuilder[nid].hist = this->wspace_.hset.InitGetHistUnitByFid(fid_offset,nid);
+    }
     for (auto& c : col) {
       const bst_uint ridx = c.index;
       // update binid in pmat
-      unsigned binid = hbuilder[nid].GetBinId(c.fvalue);
+      unsigned binid = EMPTYBINID;
+      
+      if (fid_offset >= 0){
+        binid = hbuilder[nid].GetBinId(c.fvalue);
+      }
       c.addBinid(binid);
     }
   } 
@@ -1962,11 +1985,11 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         for (bst_omp_uint i = 0; i < nsize; ++i) {
           int fid = fset[i];
           int offset = feat2workindex_[fid];
-          if (offset >= 0) {
+          //if (offset >= 0) {
             this->InitHistCol(batch[fid], tree,
                                 offset,
                                 &thread_hist_[omp_get_thread_num()]);
-          }
+          //}
         }
       }
   }
