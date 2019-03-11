@@ -1102,21 +1102,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
     double root_gain = node_sum.CalcGain(param_);
     TStats s(param_), c(param_);
-    for (int i = 0; i < hist.size; ++i) {
-      //s.Add(hist.data[i]);
-      s.Add(hist.Get(i));
-      if (s.sum_hess >= param_.min_child_weight) {
-        c.SetSubstract(node_sum, s);
-        if (c.sum_hess >= param_.min_child_weight) {
-          double loss_chg = s.CalcGain(param_) + c.CalcGain(param_) - root_gain;
-          //default goes to right
-          if (best->Update(static_cast<bst_float>(loss_chg), fid, i, false)) {
-            *left_sum = s;
-          }
-        }
-      }
-    }
-    s.Clear();
+
+
     for (int i = hist.size - 1; i >= 0; --i) {
       //s.Add(hist.data[i]);
       s.Add(hist.Get(i));
@@ -1131,6 +1118,28 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         }
       }
     }
+
+    if (param_.missing_value <= 0){ 	
+	return;
+    }
+
+    s.Clear();
+
+    for (int i = 0; i < hist.size; ++i) {
+      //s.Add(hist.data[i]);
+      s.Add(hist.Get(i));
+      if (s.sum_hess >= param_.min_child_weight) {
+        c.SetSubstract(node_sum, s);
+        if (c.sum_hess >= param_.min_child_weight) {
+          double loss_chg = s.CalcGain(param_) + c.CalcGain(param_) - root_gain;
+          //default goes to right
+          if (best->Update(static_cast<bst_float>(loss_chg), fid, i, false)) {
+            *left_sum = s;
+          }
+        }
+      }
+    }
+
   }
 
   /*

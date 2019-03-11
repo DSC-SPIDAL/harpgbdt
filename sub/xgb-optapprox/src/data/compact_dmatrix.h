@@ -652,7 +652,8 @@ class DMatrixDenseCube : public xgboost::data::SparsePageDMatrix {
 
   //interface for building the matrix
   //void Init(const SparsePage& page, MetaInfo& info, int maxbins, BlockInfo& blkInfo);
-    void Init(const SparsePage& page, MetaInfo& info, int num_maxbins, BlockInfo& blkInfo){
+    void Init(const SparsePage& page, MetaInfo& info, int num_maxbins, 
+		BlockInfo& blkInfo, int missing_value = EMPTYBINID){
         //save the info
         //shallow copy only the num_
         info_.num_row_ = info.num_row_;
@@ -734,7 +735,8 @@ class DMatrixDenseCube : public xgboost::data::SparsePageDMatrix {
             }
             #else
 
-            std::fill(ftmap.begin(), ftmap.end(),EMPTYBINID);
+            //std::fill(ftmap.begin(), ftmap.end(),EMPTYBINID);
+            std::fill(ftmap.begin(), ftmap.end(),missing_value);
 
             for (auto& ins: row){
                 //for all <features,binid> items in this row
@@ -1088,7 +1090,8 @@ class DMatrixCube : public xgboost::data::SparsePageDMatrix {
       return info_;
   }
 
-    void Init(const SparsePage& page, MetaInfo& info, int num_maxbins, BlockInfo& blkInfo){
+    void Init(const SparsePage& page, MetaInfo& info, int num_maxbins, 
+		BlockInfo& blkInfo, int missing_value = EMPTYBINID){
         //save the info
         //shallow copy only the num_
         info_.num_row_ = info.num_row_;
