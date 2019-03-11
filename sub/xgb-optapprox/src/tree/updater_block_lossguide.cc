@@ -1504,7 +1504,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             int left_len = 0, right_len = 0;
             for(int j = 0; j < num_block; j++){
                 //for block j, node i
-                auto& grp = posset_.getGroup(i, j);
+                //auto& grp = posset_.getGroup(i, j);
+                //yeah!!!!!
+                auto& grp = posset_.getGroup(nid, j);
 
                 // get left and right
                 left_len += grp.getLeftLen();
