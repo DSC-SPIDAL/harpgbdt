@@ -691,6 +691,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // of tree growth
     std::atomic<int> num_leaves(0);
     std::atomic<int> timestamp(0);
+    std::atomic<int> num_discard(0);
 
     // init the stop condition of phase1
     int max_leaves_phase1 = max_leaves_;
@@ -744,7 +745,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
     // go to the first phase, in mose cases for few nodes with openmp
     GrowTheTree(gpair, p_fmat, p_tree, param_,
-            num_leaves, timestamp, max_leaves_phase1, topK);
+            num_leaves, timestamp, num_discard, max_leaves_phase1, topK);
 
     if (max_leaves_phase1 < max_leaves_){
         // mix mode, go on with the remain expansion in node parallelism
@@ -774,7 +775,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         if (param_.async_mixmode == 1){
             this->StopOpenMP();
             UpdateWithNodeParallel(gpair, p_fmat, p_tree,
-                    num_leaves, timestamp);
+                    num_leaves, timestamp, num_discard);
             this->StartOpenMP();
         }
         else{
@@ -785,7 +786,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             //    param_.node_block_size = 1;
             }
             GrowTheTree(gpair, p_fmat, p_tree, param_,
-                    num_leaves, timestamp, 
+                    num_leaves, timestamp, num_discard,
                     max_leaves_ - threadNum,
                     topK /*topK*/
                     );
@@ -796,7 +797,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         // end part, go back to openmp
         GrowTheTree(gpair, p_fmat, p_tree, param_,
-                num_leaves, timestamp, max_leaves_, topK);
+                num_leaves, timestamp,num_discard, max_leaves_, topK);
     }
 
     //reset the binid to fvalue in this tree
@@ -841,12 +842,13 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                       TrainParam& param,
                       std::atomic<int>& num_leaves,
                       std::atomic<int>& timestamp,
+                      std::atomic<int>& num_discard,
                       int max_leaves,
                       int topK,
                       int threadid = -1
                       ) {
-      #ifdef USE_DEBUG
       auto curThreadId = std::this_thread::get_id();
+      #ifdef USE_DEBUG
       LOG(CONSOLE) << "Inside Thread :: ID  = "<<std::this_thread::get_id() <<
           "cur_num_leaves=" << num_leaves <<
           "stop_leaves=" << max_leaves <<
@@ -883,6 +885,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         while (popCnt < topK){
 
           mutex_qexpand_.lock();
+
           if (qexpand_->empty()){
               mutex_qexpand_.unlock();
               break;
@@ -897,11 +900,16 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               // set to permanent leaf when loss_chg is too small
               //
               (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+              num_discard ++;
+
           } else if(param_.max_depth > 0 && candidate.depth == param_.max_depth){
               //
               // when stop condition matches for depth aspect
               //
               (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+
+              num_discard ++;
+              
               //if (param_.grow_policy == TrainParam::kLossGuide) {
               //    //continue popout until queue empty
               //    (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
@@ -913,7 +921,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               //    CHECK_NE(1,1);
               //}
           //} else if(param_.max_leaves > 0 && num_leaves + popCnt == max_leaves){
-          } else if(num_leaves + popCnt == max_leaves){
+          } else if(num_leaves + popCnt >= max_leaves){
               //
               // when stop condition matches for num_leaves aspect
               //
@@ -921,8 +929,20 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               if (max_leaves == max_leaves_){
                   //continue popout until queue empty
                   (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+                  num_discard ++;
+              
               }
               else{
+
+                //
+                // add to split set, they are ready to go
+                //
+                split_nodeset.push_back(nid);
+                split_depth.push_back(candidate.depth);
+                splitOutput.append(candidate.sol, candidate.left_sum);
+
+                popCnt ++;
+
                   // jump out, stop pop out
                   // and go for work at once
                   break;
@@ -940,8 +960,47 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         } /* end of while pop out nodes */
 
         //quit if no need to split
-        //if (split_nodeset.size() == 0) continue;
-        if (split_nodeset.size() == 0) break;
+        if (split_nodeset.size() == 0){
+
+            #ifdef USE_DEBUG
+            std::ostringstream stringStream;
+            stringStream << curThreadId << ":" 
+                << num_leaves << ":" << max_leaves 
+                << ":" << qexpand_->size() 
+                << ":" << num_discard 
+                << "\n";
+            std::cout << stringStream.str();
+            #endif
+ 
+
+            //if (split_nodeset.size() == 0) break;
+            //check end condition
+            // make sure, not stuck in the waiting
+            if (num_leaves <= num_discard){
+                break;
+            }
+
+            if(num_leaves >= max_leaves){
+              break;
+            }
+            else if (max_leaves == max_leaves_){
+                //end phase
+                //break if empty
+              mutex_qexpand_.lock();
+              if (qexpand_->empty()){
+                  //quit = true;
+                  mutex_qexpand_.unlock();
+                  break;
+              }
+              mutex_qexpand_.unlock();
+ 
+            }
+            continue;
+            
+        }
+        
+        // add new splits
+        num_leaves += split_nodeset.size();
 
         #ifdef USE_DEBUG
         std::ostringstream stringStream;
@@ -974,11 +1033,13 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             printVec("BeforeRemove build_depth:", build_depth);
 
             // remove the nodes with max_depth already
-            RemoveNodesWithMaxDepth(build_nodeset, build_depth,
+            int removeCnt = RemoveNodesWithMaxDepth(build_nodeset, build_depth,
                     large_nodeset, large_depth,
                     param_.max_depth, p_tree);
             printVec("AfterRemove build_nodeset:", build_nodeset);
             printVec("AfterRemove build_depth:", build_depth);
+    
+            num_discard += removeCnt;
         }
 
         if (build_nodeset.size() == 0 && large_nodeset.size() == 0) continue;
@@ -1011,10 +1072,10 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                       splitOutput.left_sum[i], timestamp++));
           //mutex_qexpand_.unlock();
 
-          num_leaves++;
+          //num_leaves++;
         }
         //remove those parents node splitted
-        num_leaves -= large_nodeset.size();
+        //num_leaves -= large_nodeset.size();
 
         mutex_qexpand_.unlock();
 
@@ -1038,7 +1099,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                       DMatrix *p_fmat,
                       RegTree *p_tree,
                       std::atomic<int>& num_leaves,
-                      std::atomic<int>& timestamp
+                      std::atomic<int>& timestamp,
+                      std::atomic<int>& num_discard
                       ) {
 
     CHECK_LT(num_leaves, max_leaves_);
@@ -1058,7 +1120,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         //becareful & is dangerous
         threads.push_back(std::thread([&]{
                    GrowTheTree(gpair, p_fmat, p_tree, param_,
-                       num_leaves, timestamp, 
+                       num_leaves, timestamp,num_discard, 
                        max_leaves_ - threadNum,
                        1 /*topK*/,
                        threadid /*threadid*/
@@ -2790,7 +2852,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
    *    large_nodeset   ;
    *
    */
-  void RemoveNodesWithMaxDepth(
+  int RemoveNodesWithMaxDepth(
           std::vector<int>& build_nodeset,
           std::vector<int>& build_depth,
           std::vector<int>& large_nodeset,
@@ -2801,10 +2863,12 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     CHECK_EQ(build_nodeset.size(), build_depth.size());
     CHECK_EQ(large_nodeset.size(), large_depth.size());
 
+    int removeCnt = 0;
     std::set<int> blacklist; 
     std::set<int> blacklistNid; 
     for (int i = 0; i < build_nodeset.size(); i++){
         if (build_depth[i] >= max_depth){
+            removeCnt ++;
             const int nid = build_nodeset[i];
             blacklist.insert(i);
             blacklistNid.insert(nid);
@@ -2840,6 +2904,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     blacklistNid.clear();
     for (int i = 0; i < large_nodeset.size(); i++){
         if (large_depth[i] >= max_depth){
+            removeCnt ++;
             const int nid = large_nodeset[i];
             blacklist.insert(i);
             blacklistNid.insert(nid);
@@ -2862,6 +2927,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                     return blacklist.find(i) != blacklist.end();});
         large_depth.erase(it, large_depth.end());
     }
+
+    return removeCnt;
 
   }
 
