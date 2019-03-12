@@ -1362,7 +1362,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         int fid = fset[i];
         int fidoffset = this->feat2workindex_[fid];
 
-        CHECK_GE(fidoffset, 0);
+        //CHECK_GE(fidoffset, 0);
         if (fidoffset < 0) continue;
 
         EnumerateSplit(this->wspace_.hset.GetHistUnitByFid(fidoffset, mid),
@@ -1638,6 +1638,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
       } else {
         feat2workindex_[fidx] = -2;
         dwork_set_.push_back(fidx);
+
+        //for special columns
+        work_set_.push_back(fidx);
       }
     }
 
@@ -1780,9 +1783,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               // need to change the logic of feat2workindex_
               // should add these special column to match the model with the input matrix(cube)
               //
-              //this->wspace_.cut.push_back(cpt + fabs(cpt) + kRtEps);
-              //this->wspace_.rptr.push_back(static_cast<unsigned>(this->wspace_.cut.size()));
-              //this->wspace_.min_val.push_back(cut_.min_val[fid]);
+              this->wspace_.cut.push_back(cpt + fabs(cpt) + kRtEps);
+              this->wspace_.rptr.push_back(static_cast<unsigned>(this->wspace_.cut.size()));
+              this->wspace_.min_val.push_back(cut_.min_val[fid]);
             }
  
           }
@@ -1793,6 +1796,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         }
         // TODO: deal with special columns correctly
         //CHECK_EQ(this->wspace_.rptr.size(), (fwork_set_.size() + 1)  + 1);
+        CHECK_EQ(fwork_set_.size(), work_set_.size());
         CHECK_EQ(this->wspace_.rptr.size(), (work_set_.size() + 1)  + 1);
 
 
