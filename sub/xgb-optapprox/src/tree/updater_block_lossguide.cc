@@ -699,7 +699,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // async_mixmode=2 will skip mixmode
     if (param_.async_mixmode != 2){
         //max_leaves_phase1 = threadNum;
-        max_leaves_phase1 = threadNum * 2;
+        //max_leaves_phase1 = threadNum * 2;
+        max_leaves_phase1 = param_.group_parallel_cnt;
+
     }
     
     // init the number of nodes pop out from the priority queue
@@ -1111,7 +1113,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // group_parallel_cnt can be different with omp_max_threads()
     // in debug mode
     //
-    int threadNum = param_.group_parallel_cnt;
+    //int threadNum = param_.group_parallel_cnt;
+    const int threadNum = omp_get_max_threads();
     CHECK_GT(max_leaves_ - threadNum, 0);
 
     std::vector<std::thread> threads;
@@ -1121,7 +1124,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         threads.push_back(std::thread([&]{
                    GrowTheTree(gpair, p_fmat, p_tree, param_,
                        num_leaves, timestamp,num_discard, 
-                       max_leaves_ - threadNum,
+                       //max_leaves_ - threadNum,
+                       max_leaves_ - param_.group_parallel_cnt,
                        1 /*topK*/,
                        threadid /*threadid*/
                        );}));
