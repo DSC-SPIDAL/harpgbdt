@@ -106,6 +106,9 @@ struct TrainParam : public dmlc::Parameter<TrainParam> {
   int data_parallelism;
   int use_spinlock;
 
+  int missing_value;	
+
+
   // declare the parameters
   DMLC_DECLARE_PARAMETER(TrainParam) {
     DMLC_DECLARE_FIELD(learning_rate)
@@ -268,7 +271,13 @@ struct TrainParam : public dmlc::Parameter<TrainParam> {
         .set_default(0)
         .set_lower_bound(0)
         .describe("run model parallelism in async mode in which every node grows independently.");
+     DMLC_DECLARE_FIELD(missing_value)
+        .set_default(0)
+        .set_lower_bound(0)
+        .describe("missing value, 0 means they are zeros, >0 means they are true missing.");
  
+
+
 
     // add alias of parameters
     DMLC_DECLARE_ALIAS(reg_lambda, lambda);

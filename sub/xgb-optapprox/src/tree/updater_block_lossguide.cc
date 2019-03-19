@@ -691,6 +691,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // of tree growth
     std::atomic<int> num_leaves(0);
     std::atomic<int> timestamp(0);
+    std::atomic<int> num_discard(0);
 
     // init the stop condition of phase1
     int max_leaves_phase1 = max_leaves_;
@@ -698,7 +699,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // async_mixmode=2 will skip mixmode
     if (param_.async_mixmode != 2){
         //max_leaves_phase1 = threadNum;
-        max_leaves_phase1 = threadNum * 2;
+        //max_leaves_phase1 = threadNum * 2;
+        max_leaves_phase1 = param_.group_parallel_cnt;
+
     }
     
     // init the number of nodes pop out from the priority queue
@@ -744,7 +747,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
     // go to the first phase, in mose cases for few nodes with openmp
     GrowTheTree(gpair, p_fmat, p_tree, param_,
-            num_leaves, timestamp, max_leaves_phase1, topK);
+            num_leaves, timestamp, num_discard, max_leaves_phase1, topK);
 
     if (max_leaves_phase1 < max_leaves_){
         // mix mode, go on with the remain expansion in node parallelism
@@ -774,7 +777,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         if (param_.async_mixmode == 1){
             this->StopOpenMP();
             UpdateWithNodeParallel(gpair, p_fmat, p_tree,
-                    num_leaves, timestamp);
+                    num_leaves, timestamp, num_discard);
             this->StartOpenMP();
         }
         else{
@@ -785,7 +788,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             //    param_.node_block_size = 1;
             }
             GrowTheTree(gpair, p_fmat, p_tree, param_,
-                    num_leaves, timestamp, 
+                    num_leaves, timestamp, num_discard,
                     max_leaves_ - threadNum,
                     topK /*topK*/
                     );
@@ -796,7 +799,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         // end part, go back to openmp
         GrowTheTree(gpair, p_fmat, p_tree, param_,
-                num_leaves, timestamp, max_leaves_, topK);
+                num_leaves, timestamp,num_discard, max_leaves_, topK);
     }
 
     //reset the binid to fvalue in this tree
@@ -841,12 +844,13 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                       TrainParam& param,
                       std::atomic<int>& num_leaves,
                       std::atomic<int>& timestamp,
+                      std::atomic<int>& num_discard,
                       int max_leaves,
                       int topK,
                       int threadid = -1
                       ) {
-      #ifdef USE_DEBUG
       auto curThreadId = std::this_thread::get_id();
+      #ifdef USE_DEBUG
       LOG(CONSOLE) << "Inside Thread :: ID  = "<<std::this_thread::get_id() <<
           "cur_num_leaves=" << num_leaves <<
           "stop_leaves=" << max_leaves <<
@@ -864,7 +868,10 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
       SplitInfo splitOutput;
       SplitResult splitResult;
 
-      while (!qexpand_->empty()) {
+      bool quit = false;
+
+      //while (!qexpand_->empty()) {
+      while (!quit) {
 
         // 1. pop top K candidates
         build_nodeset.clear();
@@ -876,10 +883,15 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         split_depth.clear();
 
         int popCnt = 0;
-        while (!qexpand_->empty() && popCnt < topK){
+        //while (!qexpand_->empty() && popCnt < topK){
+        while (popCnt < topK){
 
           mutex_qexpand_.lock();
-          if (qexpand_->empty()) break;
+
+          if (qexpand_->empty()){
+              mutex_qexpand_.unlock();
+              break;
+          }
           const auto candidate = qexpand_->top();
           const int nid = candidate.nid;
           qexpand_->pop();
@@ -890,11 +902,16 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               // set to permanent leaf when loss_chg is too small
               //
               (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+              num_discard ++;
+
           } else if(param_.max_depth > 0 && candidate.depth == param_.max_depth){
               //
               // when stop condition matches for depth aspect
               //
               (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+
+              num_discard ++;
+              
               //if (param_.grow_policy == TrainParam::kLossGuide) {
               //    //continue popout until queue empty
               //    (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
@@ -906,7 +923,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               //    CHECK_NE(1,1);
               //}
           //} else if(param_.max_leaves > 0 && num_leaves + popCnt == max_leaves){
-          } else if(num_leaves + popCnt == max_leaves){
+          } else if(num_leaves + popCnt >= max_leaves){
               //
               // when stop condition matches for num_leaves aspect
               //
@@ -914,8 +931,20 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               if (max_leaves == max_leaves_){
                   //continue popout until queue empty
                   (*p_tree)[nid].SetLeaf(p_tree->Stat(nid).base_weight * param_.learning_rate);
+                  num_discard ++;
+              
               }
               else{
+
+                //
+                // add to split set, they are ready to go
+                //
+                split_nodeset.push_back(nid);
+                split_depth.push_back(candidate.depth);
+                splitOutput.append(candidate.sol, candidate.left_sum);
+
+                popCnt ++;
+
                   // jump out, stop pop out
                   // and go for work at once
                   break;
@@ -933,7 +962,47 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         } /* end of while pop out nodes */
 
         //quit if no need to split
-        if (split_nodeset.size() == 0) continue;
+        if (split_nodeset.size() == 0){
+
+            #ifdef USE_DEBUG
+            std::ostringstream stringStream;
+            stringStream << curThreadId << ":" 
+                << num_leaves << ":" << max_leaves 
+                << ":" << qexpand_->size() 
+                << ":" << num_discard 
+                << "\n";
+            std::cout << stringStream.str();
+            #endif
+ 
+
+            //if (split_nodeset.size() == 0) break;
+            //check end condition
+            // make sure, not stuck in the waiting
+            if (num_leaves <= num_discard){
+                break;
+            }
+
+            if(num_leaves >= max_leaves){
+              break;
+            }
+            else if (max_leaves == max_leaves_){
+                //end phase
+                //break if empty
+              mutex_qexpand_.lock();
+              if (qexpand_->empty()){
+                  //quit = true;
+                  mutex_qexpand_.unlock();
+                  break;
+              }
+              mutex_qexpand_.unlock();
+ 
+            }
+            continue;
+            
+        }
+        
+        // add new splits
+        num_leaves += split_nodeset.size();
 
         #ifdef USE_DEBUG
         std::ostringstream stringStream;
@@ -947,7 +1016,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         ApplySplitOnTree(split_nodeset, splitOutput, p_tree);
         ApplySplitOnPos(split_nodeset, split_depth, splitResult, *p_tree);
 
-        printPOSSetSingle(posset_);
+        //printPOSSetSingle(posset_);
 
         splitResult.getResultNodeSet(build_nodeset, build_depth,
                 large_nodeset, large_depth);
@@ -966,11 +1035,13 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             printVec("BeforeRemove build_depth:", build_depth);
 
             // remove the nodes with max_depth already
-            RemoveNodesWithMaxDepth(build_nodeset, build_depth,
+            int removeCnt = RemoveNodesWithMaxDepth(build_nodeset, build_depth,
                     large_nodeset, large_depth,
                     param_.max_depth, p_tree);
             printVec("AfterRemove build_nodeset:", build_nodeset);
             printVec("AfterRemove build_depth:", build_depth);
+    
+            num_discard += removeCnt;
         }
 
         if (build_nodeset.size() == 0 && large_nodeset.size() == 0) continue;
@@ -990,20 +1061,25 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                     large_depth.end());
         }
         FindSplit(gpair, work_set_, build_nodeset, splitOutput, threadid);
+
+
+        mutex_qexpand_.lock();
         for (int i = 0; i < build_nodeset.size(); i++){
 
-          mutex_qexpand_.lock();
+          //mutex_qexpand_.lock();
           qexpand_->push(this->newEntry(build_nodeset[i],
                       build_depth[i],
                       //p_tree->GetDepth(build_nodeset[i]),
                       splitOutput.sol[i],
                       splitOutput.left_sum[i], timestamp++));
-          mutex_qexpand_.unlock();
+          //mutex_qexpand_.unlock();
 
-          num_leaves++;
+          //num_leaves++;
         }
         //remove those parents node splitted
-        num_leaves -= large_nodeset.size();
+        //num_leaves -= large_nodeset.size();
+
+        mutex_qexpand_.unlock();
 
         //check finish
         if (max_leaves != max_leaves_ && num_leaves >= max_leaves) {
@@ -1025,7 +1101,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                       DMatrix *p_fmat,
                       RegTree *p_tree,
                       std::atomic<int>& num_leaves,
-                      std::atomic<int>& timestamp
+                      std::atomic<int>& timestamp,
+                      std::atomic<int>& num_discard
                       ) {
 
     CHECK_LT(num_leaves, max_leaves_);
@@ -1036,7 +1113,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // group_parallel_cnt can be different with omp_max_threads()
     // in debug mode
     //
-    int threadNum = param_.group_parallel_cnt;
+    //int threadNum = param_.group_parallel_cnt;
+    const int threadNum = omp_get_max_threads();
     CHECK_GT(max_leaves_ - threadNum, 0);
 
     std::vector<std::thread> threads;
@@ -1045,8 +1123,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         //becareful & is dangerous
         threads.push_back(std::thread([&]{
                    GrowTheTree(gpair, p_fmat, p_tree, param_,
-                       num_leaves, timestamp, 
-                       max_leaves_ - threadNum,
+                       num_leaves, timestamp,num_discard, 
+                       //max_leaves_ - threadNum,
+                       max_leaves_ - param_.group_parallel_cnt,
                        1 /*topK*/,
                        threadid /*threadid*/
                        );}));
@@ -1089,21 +1168,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
     double root_gain = node_sum.CalcGain(param_);
     TStats s(param_), c(param_);
-    for (int i = 0; i < hist.size; ++i) {
-      //s.Add(hist.data[i]);
-      s.Add(hist.Get(i));
-      if (s.sum_hess >= param_.min_child_weight) {
-        c.SetSubstract(node_sum, s);
-        if (c.sum_hess >= param_.min_child_weight) {
-          double loss_chg = s.CalcGain(param_) + c.CalcGain(param_) - root_gain;
-          //default goes to right
-          if (best->Update(static_cast<bst_float>(loss_chg), fid, i, false)) {
-            *left_sum = s;
-          }
-        }
-      }
-    }
-    s.Clear();
+
+
     for (int i = hist.size - 1; i >= 0; --i) {
       //s.Add(hist.data[i]);
       s.Add(hist.Get(i));
@@ -1118,6 +1184,28 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         }
       }
     }
+
+    if (param_.missing_value <= 0){ 	
+	return;
+    }
+
+    s.Clear();
+
+    for (int i = 0; i < hist.size; ++i) {
+      //s.Add(hist.data[i]);
+      s.Add(hist.Get(i));
+      if (s.sum_hess >= param_.min_child_weight) {
+        c.SetSubstract(node_sum, s);
+        if (c.sum_hess >= param_.min_child_weight) {
+          double loss_chg = s.CalcGain(param_) + c.CalcGain(param_) - root_gain;
+          //default goes to right
+          if (best->Update(static_cast<bst_float>(loss_chg), fid, i, false)) {
+            *left_sum = s;
+          }
+        }
+      }
+    }
+
   }
 
   /*
@@ -1222,7 +1310,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
             int fidoffset = this->feat2workindex_[fid];
 
-            CHECK_GE(fidoffset, 0);
+            //CHECK_GE(fidoffset, 0);
+            if (fidoffset < 0) continue;
+
             EnumerateSplit(this->wspace_.hset.GetHistUnitByFid(fidoffset, mid),
                        node_sum, fid, &best, &left_sum[wid]);
 
@@ -1276,7 +1366,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         int fid = fset[i];
         int fidoffset = this->feat2workindex_[fid];
 
-        CHECK_GE(fidoffset, 0);
+        //CHECK_GE(fidoffset, 0);
+        if (fidoffset < 0) continue;
+
         EnumerateSplit(this->wspace_.hset.GetHistUnitByFid(fidoffset, mid),
                        node_sum, fid, &best, &left_sum[wid]);
 
@@ -1487,7 +1579,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
             int left_len = 0, right_len = 0;
             for(int j = 0; j < num_block; j++){
                 //for block j, node i
-                auto& grp = posset_.getGroup(i, j);
+                //auto& grp = posset_.getGroup(i, j);
+                //yeah!!!!!
+                auto& grp = posset_.getGroup(nid, j);
 
                 // get left and right
                 left_len += grp.getLeftLen();
@@ -1548,6 +1642,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
       } else {
         feat2workindex_[fidx] = -2;
         dwork_set_.push_back(fidx);
+
+        //for special columns
+        work_set_.push_back(fidx);
       }
     }
 
@@ -1690,9 +1787,9 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
               // need to change the logic of feat2workindex_
               // should add these special column to match the model with the input matrix(cube)
               //
-              //this->wspace_.cut.push_back(cpt + fabs(cpt) + kRtEps);
-              //this->wspace_.rptr.push_back(static_cast<unsigned>(this->wspace_.cut.size()));
-              //this->wspace_.min_val.push_back(cut_.min_val[fid]);
+              this->wspace_.cut.push_back(cpt + fabs(cpt) + kRtEps);
+              this->wspace_.rptr.push_back(static_cast<unsigned>(this->wspace_.cut.size()));
+              this->wspace_.min_val.push_back(cut_.min_val[fid]);
             }
  
           }
@@ -1703,6 +1800,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         }
         // TODO: deal with special columns correctly
         //CHECK_EQ(this->wspace_.rptr.size(), (fwork_set_.size() + 1)  + 1);
+        CHECK_EQ(fwork_set_.size(), work_set_.size());
         CHECK_EQ(this->wspace_.rptr.size(), (work_set_.size() + 1)  + 1);
 
 
@@ -1938,11 +2036,17 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     // only for initialization
     // nid should be 0
     const unsigned nid = 0;
-    hbuilder[nid].hist = this->wspace_.hset.InitGetHistUnitByFid(fid_offset,nid);
+    if (fid_offset >= 0){
+        hbuilder[nid].hist = this->wspace_.hset.InitGetHistUnitByFid(fid_offset,nid);
+    }
     for (auto& c : col) {
       const bst_uint ridx = c.index;
       // update binid in pmat
-      unsigned binid = hbuilder[nid].GetBinId(c.fvalue);
+      unsigned binid = EMPTYBINID;
+      
+      if (fid_offset >= 0){
+        binid = hbuilder[nid].GetBinId(c.fvalue);
+      }
       c.addBinid(binid);
     }
   } 
@@ -1962,11 +2066,11 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
         for (bst_omp_uint i = 0; i < nsize; ++i) {
           int fid = fset[i];
           int offset = feat2workindex_[fid];
-          if (offset >= 0) {
+          //if (offset >= 0) {
             this->InitHistCol(batch[fid], tree,
                                 offset,
                                 &thread_hist_[omp_get_thread_num()]);
-          }
+          //}
         }
       }
   }
@@ -2153,12 +2257,14 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         for (int j = 0; j < grp.size(); ++j) {
             const int ridx = grp.getRowId(j);
+            const GradientPair gp = grp.getGHPair(j);
 
             for (int k = 0; k < block.rowsizeByRowId(ridx); k++){
 
                 if (block._binidByRowId(ridx,k) == EMPTYBINID) continue;
 
-                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                //hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gp);
 
                 /*
                  * not much benefits from short->byte
@@ -2256,12 +2362,14 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
 
         for (int j = 0; j < grp.size(); ++j) {
             const int ridx = grp.getRowId(j);
+            const GradientPair gp = grp.getGHPair(j);
 
             for (int k = 0; k < block.rowsizeByRowId(ridx); k++){
 
                 if (block._binidByRowId(ridx,k) == EMPTYBINID) continue;
 
-                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                //hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gpair[ridx]);
+                hbuilder[nid].AddWithIndex(block._blkaddrByRowId(ridx, k), gp);
 
                 /*
                  * not much benefits from short->byte
@@ -2752,7 +2860,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
    *    large_nodeset   ;
    *
    */
-  void RemoveNodesWithMaxDepth(
+  int RemoveNodesWithMaxDepth(
           std::vector<int>& build_nodeset,
           std::vector<int>& build_depth,
           std::vector<int>& large_nodeset,
@@ -2763,10 +2871,12 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     CHECK_EQ(build_nodeset.size(), build_depth.size());
     CHECK_EQ(large_nodeset.size(), large_depth.size());
 
+    int removeCnt = 0;
     std::set<int> blacklist; 
     std::set<int> blacklistNid; 
     for (int i = 0; i < build_nodeset.size(); i++){
         if (build_depth[i] >= max_depth){
+            removeCnt ++;
             const int nid = build_nodeset[i];
             blacklist.insert(i);
             blacklistNid.insert(nid);
@@ -2802,6 +2912,7 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
     blacklistNid.clear();
     for (int i = 0; i < large_nodeset.size(); i++){
         if (large_depth[i] >= max_depth){
+            removeCnt ++;
             const int nid = large_nodeset[i];
             blacklist.insert(i);
             blacklistNid.insert(nid);
@@ -2824,6 +2935,8 @@ class HistMakerBlockLossguide: public BlockBaseMakerLossguide<TStats> {
                     return blacklist.find(i) != blacklist.end();});
         large_depth.erase(it, large_depth.end());
     }
+
+    return removeCnt;
 
   }
 
