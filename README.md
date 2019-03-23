@@ -14,6 +14,7 @@ Testbed of gbt optimization project
 + 11302018    C++ Collective Communication operator, allreduce, rotate, ready, by Chathura. [link](https://github.com/DSC-SPIDAL/harpc)
 + 01072019    Block-based parallelism full version ready and Report at[10.BlockParallelReport](run/10.BlockParallelReport) at tag [block_parallelism_gbt](https://github.iu.edu/pengb/gbt-test/tree/block_parallelism_gbt)
 + 02192019    Intel ShowCase report at[15.IntelShowCase](run/15.IntelShowCase) at tag [unity-02192019](https://github.iu.edu/pengb/gbt-test/tree/unity-02192019)
++ 03192019    [Paper draft v2](doc/paper/draft-v2) with experiments at [16.Final-Sync](run/16.Final-Sync) at tag [sync-03192019](https://github.iu.edu/pengb/gbt-test/tree/sync-03192019)
 
 ### Tasks To-do list
 
