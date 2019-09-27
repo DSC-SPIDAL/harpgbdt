@@ -1,6 +1,6 @@
 HarpGBT
 ========
-Testbed of gbt optimization project
+Testbed of gbt optimization project, [experiment scripts](run/) go to the "run" directory.
 
 ### Milestones
 
