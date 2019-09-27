@@ -6,22 +6,17 @@ This is a simple tutorial to run experiments of harpgbdt on the higgs dataset.
 
 1. init the env
 
-```
-if [ -z $_gbtproject_ ]; then 
-    echo 'init the env by run "source gbt-test/bin/init_env.sh" first'
-    exit 0
-fi
+go to your work dir, and run the init_tutorial.sh script
 
-mkdir tutorial
+```
+GBTTESTHOMEDIR/run/19.Tutorial/init_tutorial.sh
+
+```
+
+2. prepare dataset
+
+```
 cd tutorial
-
-cp -r $_gbtproject_/run/19.Tutorial/* .
-```
-
-
-3. prepare dataset
-
-```
 cd higgs
 
 ./get_higgsdata.sh
